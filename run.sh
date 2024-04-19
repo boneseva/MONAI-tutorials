@@ -20,10 +20,5 @@ echo $MONAI_DATA_DIRECTORY
 echo "GPUs assigned to this job: $CUDA_VISIBLE_DEVICES"
 nvidia-smi  # This will show detailed GPU usage and stats
 
-<<<<<<< HEAD
 python 3d_segmentation/swin_unetr_segmentation_3D.py
 #python 3d_segmentation/swin_unetr_segmentation_3D_test.py
-=======
-#python 3d_segmentation/swin_unetr_segmentation_3D.py
-python 3d_segmentation/swin_unetr_segmentation_3D_test.py
->>>>>>> 45b62e7 (swin)
