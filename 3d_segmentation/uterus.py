@@ -62,8 +62,7 @@ class UterUS(Dataset):
         image = image.float()
         image /= 255.0
     
-        label = image.float()
-        label /= 255.0
+        label = label.float()
     
         sample = {'image': image, 'label': label, 'name': image_name}
         

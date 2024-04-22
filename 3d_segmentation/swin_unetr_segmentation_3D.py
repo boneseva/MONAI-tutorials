@@ -284,6 +284,7 @@ def trainer(
 
 
 roi = (128, 128, 64)
+roi = (64, 64, 32)
 batch_size = 2
 sw_batch_size = 2
 fold = 1
@@ -298,12 +299,6 @@ def main():
 
     data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
     # json_list = "C:/Users/Eva/Documents/UterUS/dataset/train.json"
-    batch_size = 2
-    sw_batch_size = 2
-    fold = 1
-    infer_overlap = 0.5
-    max_epochs = 2
-    val_every = 10
     train_loader, val_loader = get_loader(batch_size, data_dir, fold, roi)
 
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
@@ -324,7 +319,7 @@ def main():
     dice_loss = DiceLoss(to_onehot_y=False, sigmoid=True)
     post_sigmoid = Activations(sigmoid=True)
     post_pred = AsDiscrete(argmax=False, threshold=0.5)
-    dice_acc = DiceMetric(include_background=True, reduction=MetricReduction.MEAN_BATCH, get_not_nans=True)
+    dice_acc = DiceMetric(include_background=False, reduction=MetricReduction.MEAN_BATCH, get_not_nans=True, num_classes=2)
     model_inferer = partial(
         sliding_window_inference,
         roi_size=[roi[0], roi[1], roi[2]],
