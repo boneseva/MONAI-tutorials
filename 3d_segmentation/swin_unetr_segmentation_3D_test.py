@@ -161,7 +161,9 @@ def main():
 
     torch.backends.cudnn.benchmark = True
 
-    model.load_state_dict(torch.load(os.path.join(ROOT, "model.pt"))["state_dict"])
+    # model.load_state_dict(torch.load(os.path.join(ROOT, "model.pt"))["state_dict"])
+    weight = torch.load("/home/bonese/tutorials/model_swinvit.pt")
+    model.load_from(weights=weight)
     model.to(device)
     model.eval()
 
@@ -187,7 +189,7 @@ def main():
             seg_out.to_filename(os.path.join(ROOT, name[0]+".result.nii.gz"))
 
 # ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
-ROOT = "/home/bonese/tutorials/3d_segmentation/results"
+ROOT = os.environ.get('MONAI_DATA_DIRECTORY')
 
 if __name__ == "__main__":
 

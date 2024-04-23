@@ -324,7 +324,11 @@ def main():
         attn_drop_rate=0.0,
         dropout_path_rate=0.0,
         use_checkpoint=True,
-    ).to(device)
+    )
+    
+    weight = torch.load("/home/bonese/tutorials/model_swinvit.pt")
+    model.load_from(weights=weight)
+    model.to(device)
 
     torch.backends.cudnn.benchmark = True
     dice_loss = DiceLoss(to_onehot_y=False, sigmoid=True)
