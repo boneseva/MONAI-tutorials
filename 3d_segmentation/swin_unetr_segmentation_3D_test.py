@@ -126,7 +126,8 @@ def main():
     global max_epochs, device, batch_size, val_every
     print_config()
 
-    data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
+    # data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
+    data_dir = "/home/bonese/UterUS/dataset"
     # json_list = "/home/bonese/UterUS/dataset/train.json"
 
     # Example transforms for validation
@@ -185,8 +186,9 @@ def main():
             name = batch_data["name"]
             seg_out.to_filename(os.path.join(ROOT, name[0]+".result.nii.gz"))
 
-ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
- 
+# ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
+ROOT = "/home/bonese/tutorials/3d_segmentation/results"
+
 if __name__ == "__main__":
 
     main()

@@ -14,11 +14,14 @@ conda activate MONAI
 echo "...activated the conda environment..."
 
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
-export MONAI_DATA_DIRECTORY="/home/bonese/tutorials/3d_segmentation/results"
+# Use SLURM_JOB_ID to construct the directory name
+export MONAI_DATA_DIRECTORY="/home/bonese/tutorials/3d_segmentation/results${SLURM_JOB_ID}"
 echo $MONAI_DATA_DIRECTORY
+
+mkdir -p $MONAI_DATA_DIRECTORY  # Added -p to avoid errors if the directory already exists
 
 echo "GPUs assigned to this job: $CUDA_VISIBLE_DEVICES"
 nvidia-smi  # This will show detailed GPU usage and stats
 
 python 3d_segmentation/swin_unetr_segmentation_3D.py
-#python 3d_segmentation/swin_unetr_segmentation_3D_test.py
+# python 3d_segmentation/swin_unetr_segmentation_3D_test.py

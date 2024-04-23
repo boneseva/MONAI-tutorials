@@ -262,14 +262,14 @@ def trainer(
             # dices_wt.append(dice_wt)
             # dices_et.append(dice_et)
             dices_avg.append(val_avg_acc)
-            # if val_avg_acc > val_acc_max:
-            print("new best ({:.6f} --> {:.6f}). ".format(val_acc_max, val_avg_acc))
-            val_acc_max = val_avg_acc
-            save_checkpoint(
-                model,
-                epoch,
-                best_acc=val_acc_max,
-            )
+            if val_avg_acc > val_acc_max:
+                print("new best ({:.6f} --> {:.6f}). ".format(val_acc_max, val_avg_acc))
+                val_acc_max = val_avg_acc
+                save_checkpoint(
+                    model,
+                    epoch,
+                    best_acc=val_acc_max,
+                )
             scheduler.step()
     print("Training Finished !, Best Accuracy: ", val_acc_max)
     return (
@@ -283,23 +283,34 @@ def trainer(
     )
 
 
-roi = (128, 128, 64)
-roi = (64, 64, 32)
+roi = (128, 128, 128)
 batch_size = 2
 sw_batch_size = 2
 fold = 1
 infer_overlap = 0.5
-max_epochs = 2
+max_epochs = 100
 val_every = 1
+learning_rate = 1e-6
 
+def printParams():
+    print("Roi: ", roi)
+    print("Batch size: ", batch_size)
+    print("Fold: ", fold)
+    print("Infer overlap: ", infer_overlap)
+    print("Max epochs: ", max_epochs)
+    print("Val every: ", val_every)
+    print("Learning rate: ", learning_rate)
 
 def main():
     global max_epochs, device, batch_size, val_every
     print_config()
 
-    data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
+    # data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
+    data_dir = "/home/bonese/UterUS/dataset"
     # json_list = "C:/Users/Eva/Documents/UterUS/dataset/train.json"
     train_loader, val_loader = get_loader(batch_size, data_dir, fold, roi)
+
+    printParams()
 
     os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -328,13 +339,12 @@ def main():
         overlap=infer_overlap,
     )
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4, weight_decay=1e-5)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs)
 
     start_epoch = 0
 
-    (
-        val_acc_max,
+    (   val_acc_max,
         dices_tc,
         dices_wt,
         dices_et,
@@ -358,7 +368,8 @@ def main():
     print(f"train completed, best average dice: {val_acc_max:.4f} ")
 
 
-ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
+# ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
+ROOT = os.environ.get('MONAI_DATA_DIRECTORY')
 
 if __name__ == "__main__":
     main()
