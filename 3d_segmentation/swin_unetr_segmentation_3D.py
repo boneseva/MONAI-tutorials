@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import nibabel as nib
 
-from monai.losses import DiceLoss
+from monai.losses import DiceLoss, DiceCELoss
 from monai.inferers import sliding_window_inference
 from monai import transforms
 from monai.transforms import (
@@ -26,12 +26,15 @@ from monai import data
 from monai.data import decollate_batch, pad_list_data_collate, DataLoader
 from functools import partial
 
+from tqdm import tqdm
+
 from uterus import UterUS
 
 from torch.cuda.amp import autocast, GradScaler
 
 import torch
 
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
 
 class AverageMeter(object):
     def __init__(self):
@@ -48,7 +51,6 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = np.where(self.count > 0, self.sum / self.count, self.sum)
-        print("update " + str(self.val) + " " + str(self.sum) + " " + str(self.count) + " " + str(self.avg))
 
 
 def datafold_read(datalist, basedir, fold=0, key="training"):
@@ -92,19 +94,22 @@ def debug_transform(data):
 
 def get_loader(batch_size, data_dir, fold, roi):
     train_transform = transforms.Compose([
-        # transforms.Lambda(print_shape),
-        # , keys=["image", "label"], roi_size=roi, random_size=False),
-        # transforms.SpatialPadd(keys=["image", "label"], spatial_size=roi, method='symmetric'),  # Adjust size as needed
+        # transforms.LoadImaged(keys=["image", "label"], ensure_channel_first=True),
         transforms.ResizeWithPadOrCropd(keys=["image", "label"], spatial_size=roi),
-        transforms.NormalizeIntensityd(keys=["image", "label"], nonzero=True, channel_wise=True),
-        transforms.EnsureType()
+        transforms.NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
+        transforms.EnsureTyped(keys=["image", "label"], track_meta=True),
+        transforms.RandShiftIntensityd(
+            keys=["image"],
+            offsets=0.10,
+            prob=0.50,
+        ),
     ])
 
     # Example transforms for validation
     val_transform = transforms.Compose([
-        # transforms.SpatialPadd(keys=["image", "label"], spatial_size=roi, method='symmetric'),  # Adjust size as needed
-        transforms.ResizeWithPadOrCropd(keys=["image", "label"], spatial_size=roi),
-        transforms.EnsureType()
+        # transforms.LoadImaged(keys=["image", "label"], ensure_channel_first=True),
+        # transforms.ResizeWithPadOrCropd(keys=["image", "label"], spatial_size=roi),
+        transforms.EnsureTyped(keys=["image", "label"], track_meta=True)
     ])
 
     # Initialize your custom dataset for training and validation
@@ -122,7 +127,7 @@ def get_loader(batch_size, data_dir, fold, roi):
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=1,  # Typically validation batch size is set to 1 for medical images
+        batch_size=batch_size,  # Typically validation batch size is set to 1 for medical images
         shuffle=False,
         num_workers=0,
         collate_fn=pad_list_data_collate,
@@ -131,12 +136,21 @@ def get_loader(batch_size, data_dir, fold, roi):
     return train_loader, val_loader
 
 
+def save_volume(data, filename):
+    # Save the volume that is metatensor to a file
+    array = data[0].cpu().numpy()
+    array = np.squeeze(array)
+    nib.save(nib.Nifti1Image(array, np.eye(4)), os.path.join(os.path.curdir, filename+"volume.nii.gz"))
+
+
 def train_epoch(model, loader, optimizer, epoch, loss_func):
     model.train()
     start_time = time.time()
     run_loss = AverageMeter()
     for idx, batch_data in enumerate(loader):
         data, target = batch_data["image"].to(device), batch_data["label"].to(device)
+        save_volume(data, 'data')
+        save_volume(target, 'target')
         logits = model(data)
         loss = loss_func(logits, target)
         loss.backward()
@@ -176,16 +190,10 @@ def val_epoch(
             acc, not_nans = acc_func.aggregate()
             run_acc.update(acc.cpu().numpy(), n=not_nans.cpu().numpy())
             dice_tc = run_acc.avg
-            # dice_wt = run_acc.avg[1]
-            # dice_et = run_acc.avg[2]
             print(
                 "Val {}/{} {}/{}".format(epoch, max_epochs, idx, len(loader)),
                 ", dice_tc:",
                 dice_tc,
-                # ", dice_wt:",
-                # dice_wt,
-                # ", dice_et:",
-                # dice_et,
                 ", time {:.2f}s".format(time.time() - start_time),
             )
             start_time = time.time()
@@ -243,24 +251,16 @@ def trainer(
                 post_pred=post_pred,
             )
             dice_tc = val_acc[0]
-            # dice_wt = val_acc[1]
-            # dice_et = val_acc[2]
             val_avg_acc = np.mean(val_acc)
             print(
                 "Final validation stats {}/{}".format(epoch, max_epochs - 1),
                 ", dice_tc:",
                 dice_tc,
-                # ", dice_wt:",
-                # dice_wt,
-                # ", dice_et:",
-                # dice_et,
                 ", Dice_Avg:",
                 val_avg_acc,
                 ", time {:.2f}s".format(time.time() - epoch_time),
             )
             dices_tc.append(dice_tc)
-            # dices_wt.append(dice_wt)
-            # dices_et.append(dice_et)
             dices_avg.append(val_avg_acc)
             if val_avg_acc > val_acc_max:
                 print("new best ({:.6f} --> {:.6f}). ".format(val_acc_max, val_avg_acc))
@@ -283,12 +283,74 @@ def trainer(
     )
 
 
-roi = (128, 128, 128)
+def validation(epoch_iterator_val):
+    model.eval()
+    with torch.no_grad():
+        for batch in epoch_iterator_val:
+            val_inputs, val_labels = (batch["image"].cuda(), batch["label"].cuda())
+            with torch.cuda.amp.autocast():
+                val_outputs = sliding_window_inference(val_inputs, roi, sw_batch_size, model)
+
+            val_labels_list = decollate_batch(val_labels)
+            val_labels_convert = [post_label(val_label_tensor) for val_label_tensor in val_labels_list]
+            val_outputs_list = decollate_batch(val_outputs)
+            val_output_convert = [post_pred(val_pred_tensor) for val_pred_tensor in val_outputs_list]
+
+            dice_metric(y_pred=val_output_convert, y=val_labels_convert)
+            epoch_iterator_val.set_description("Validate (%d / %d Steps)" % (global_step, 10.0))  # noqa: B038
+        mean_dice_val = dice_metric.aggregate().item()
+        dice_metric.reset()
+    return mean_dice_val
+
+
+def train(global_step, train_loader, dice_val_best, global_step_best):
+    model.train()
+    epoch_loss = 0
+    step = 0
+    epoch_iterator = tqdm(train_loader, desc="Training (X / X Steps) (loss=X.X)", dynamic_ncols=True)
+    for step, batch in enumerate(epoch_iterator):
+        step += 1
+        x, y = (batch["image"].cuda(), batch["label"].cuda())
+        with torch.cuda.amp.autocast():
+            logit_map = model(x)
+            loss = loss_function(logit_map, y)
+        scaler.scale(loss).backward()
+        epoch_loss += loss.item()
+        scaler.unscale_(optimizer)
+        scaler.step(optimizer)
+        scaler.update()
+        optimizer.zero_grad()
+        epoch_iterator.set_description(  # noqa: B038
+            f"Training ({global_step} / {max_iterations} Steps) (loss={loss:2.5f})"
+        )
+        if (global_step % eval_num == 0 and global_step != 0) or global_step == max_iterations:
+            epoch_iterator_val = tqdm(val_loader, desc="Validate (X / X Steps) (dice=X.X)", dynamic_ncols=True)
+            dice_val = validation(epoch_iterator_val)
+            epoch_loss /= step
+            epoch_loss_values.append(epoch_loss)
+            metric_values.append(dice_val)
+            if dice_val > dice_val_best:
+                dice_val_best = dice_val
+                global_step_best = global_step
+                torch.save(model.state_dict(), os.path.join(ROOT, "best_metric_model.pth"))
+                print(
+                    "Model Was Saved ! Current Best Avg. Dice: {} Current Avg. Dice: {}".format(dice_val_best, dice_val)
+                )
+            else:
+                print(
+                    "Model Was Not Saved ! Current Best Avg. Dice: {} Current Avg. Dice: {}".format(
+                        dice_val_best, dice_val
+                    )
+                )
+        global_step += 1
+    return global_step, dice_val_best, global_step_best
+
+roi = (64, 64, 64)
 batch_size = 2
 sw_batch_size = 2
 fold = 1
 infer_overlap = 0.5
-max_epochs = 100
+max_epochs = 2
 val_every = 1
 learning_rate = 1e-6
 
@@ -302,11 +364,13 @@ def printParams():
     print("Learning rate: ", learning_rate)
 
 def main():
-    global max_epochs, device, batch_size, val_every
+    global max_epochs, device, batch_size, val_every, learning_rate, model, optimizer, scheduler, dice_loss, post_sigmoid, post_pred, dice_acc, \
+        model_inferer, loss_function, scaler, dice_metric, global_step, dice_val_best, global_step_best, epoch_loss_values, metric_values, data_dir, \
+        train_loader, val_loader, roi, sw_batch_size, infer_overlap, max_iterations, eval_num, post_label
     print_config()
 
-    # data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
-    data_dir = "/home/bonese/UterUS/dataset"
+    data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
+    # data_dir = "/home/bonese/UterUS/dataset"
     # json_list = "C:/Users/Eva/Documents/UterUS/dataset/train.json"
     train_loader, val_loader = get_loader(batch_size, data_dir, fold, roi)
 
@@ -324,56 +388,75 @@ def main():
         attn_drop_rate=0.0,
         dropout_path_rate=0.0,
         use_checkpoint=True,
-    )
+    ).to(device)
     
-    weight = torch.load("/home/bonese/tutorials/model_swinvit.pt")
-    model.load_from(weights=weight)
-    model.to(device)
+    # weight = torch.load("/home/bonese/tutorials/model_swinvit.pt")
+    # model.load_from(weights=weight)
+    # model.to(device)
 
     torch.backends.cudnn.benchmark = True
-    dice_loss = DiceLoss(to_onehot_y=False, sigmoid=True)
-    post_sigmoid = Activations(sigmoid=True)
-    post_pred = AsDiscrete(argmax=False, threshold=0.5)
-    dice_acc = DiceMetric(include_background=False, reduction=MetricReduction.MEAN_BATCH, get_not_nans=True, num_classes=2)
-    model_inferer = partial(
-        sliding_window_inference,
-        roi_size=[roi[0], roi[1], roi[2]],
-        sw_batch_size=sw_batch_size,
-        predictor=model,
-        overlap=infer_overlap,
-    )
-
+    loss_function = DiceCELoss(to_onehot_y=True, softmax=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs)
+    scaler = torch.cuda.amp.GradScaler()
 
-    start_epoch = 0
+    max_iterations = 100
+    eval_num = 10
+    post_label = AsDiscrete(to_onehot=2)
+    post_pred = AsDiscrete(argmax=True, to_onehot=2)
+    dice_metric = DiceMetric(include_background=True, reduction="mean", get_not_nans=False)
+    global_step = 0
+    dice_val_best = 0.0
+    global_step_best = 0
+    epoch_loss_values = []
+    metric_values = []
+    while global_step < max_iterations:
+        global_step, dice_val_best, global_step_best = train(global_step, train_loader, dice_val_best, global_step_best)
+    model.load_state_dict(torch.load(os.path.join(ROOT, "best_metric_model.pth")))
+    print(f"train completed, best_metric: {dice_val_best:.4f} " f"at iteration: {global_step_best}")
+    # torch.backends.cudnn.benchmark = True
+    # dice_loss = DiceLoss(to_onehot_y=False, sigmoid=True)
+    # post_sigmoid = Activations(sigmoid=True)
+    # post_pred = AsDiscrete(argmax=False, threshold=0.5)
+    # dice_acc = DiceMetric(include_background=False, reduction=MetricReduction.MEAN_BATCH, get_not_nans=True, num_classes=2)
+    # model_inferer = partial(
+    #     sliding_window_inference,
+    #     roi_size=[roi[0], roi[1], roi[2]],
+    #     sw_batch_size=sw_batch_size,
+    #     predictor=model,
+    #     overlap=infer_overlap,
+    # )
+    #
+    # optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs)
+    #
+    # start_epoch = 0
+    #
+    # (   val_acc_max,
+    #     dices_tc,
+    #     dices_wt,
+    #     dices_et,
+    #     dices_avg,
+    #     loss_epochs,
+    #     trains_epoch,
+    # ) = trainer(
+    #     model=model,
+    #     train_loader=train_loader,
+    #     val_loader=val_loader,
+    #     optimizer=optimizer,
+    #     loss_func=dice_loss,
+    #     acc_func=dice_acc,
+    #     scheduler=scheduler,
+    #     model_inferer=model_inferer,
+    #     start_epoch=start_epoch,
+    #     post_sigmoid=post_sigmoid,
+    #     post_pred=post_pred,
+    # )
+    #
+    # print(f"train completed, best average dice: {val_acc_max:.4f} ")
 
-    (   val_acc_max,
-        dices_tc,
-        dices_wt,
-        dices_et,
-        dices_avg,
-        loss_epochs,
-        trains_epoch,
-    ) = trainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        optimizer=optimizer,
-        loss_func=dice_loss,
-        acc_func=dice_acc,
-        scheduler=scheduler,
-        model_inferer=model_inferer,
-        start_epoch=start_epoch,
-        post_sigmoid=post_sigmoid,
-        post_pred=post_pred,
-    )
 
-    print(f"train completed, best average dice: {val_acc_max:.4f} ")
-
-
-# ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
-ROOT = os.environ.get('MONAI_DATA_DIRECTORY')
+ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
+# ROOT = os.environ.get('MONAI_DATA_DIRECTORY')
 
 if __name__ == "__main__":
     main()

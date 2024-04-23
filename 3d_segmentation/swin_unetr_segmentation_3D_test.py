@@ -76,19 +76,23 @@ def debug_transform(data):
 def get_loader(batch_size, data_dir, fold, roi):
     
     train_transform = transforms.Compose([
-        # transforms.Lambda(print_shape),
-        # , keys=["image", "label"], roi_size=roi, random_size=False),
-        # transforms.SpatialPadd(keys=["image", "label"], spatial_size=roi, method='symmetric'),  # Adjust size as needed
+        transforms.LoadImaged(keys=["image", "label"], ensure_channel_first=True),
         transforms.ResizeWithPadOrCropd(keys=["image", "label"], spatial_size=roi),
         transforms.NormalizeIntensityd(keys=["image", "label"], nonzero=True, channel_wise=True),
-        transforms.EnsureType()
+        transforms.EnsureTyped(keys=["image", "label"], device=device, track_meta=True),
+        transforms.RandShiftIntensityd(
+            keys=["image"],
+            offsets=0.10,
+            prob=0.50,
+        ),
     ])
 
     # Example transforms for validation
     val_transform = transforms.Compose([    
         # transforms.SpatialPadd(keys=["image", "label"], spatial_size=roi, method='symmetric'),  # Adjust size as needed
+        transforms.LoadImaged(keys=["image", "label"], ensure_channel_first=True),
         transforms.ResizeWithPadOrCropd(keys=["image", "label"], spatial_size=roi),
-        transforms.EnsureType()
+        transforms.EnsureTyped(keys=["image", "label"], device=device, track_meta=True)
     ])
 
     # Initialize your custom dataset for training and validation
