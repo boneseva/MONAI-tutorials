@@ -295,24 +295,25 @@ def trainer(
     )
 
 
-def validation(epoch_iterator_val):
+def validation(epoch_iterator_val, test=False):
     model.eval()
     with torch.no_grad():
         for batch in epoch_iterator_val:
             val_inputs, val_labels = (batch["image"].cuda(), batch["label"].cuda())
+            if test:
+                val_inputs, val_labels, val_name = (batch["image"].cuda(), batch["label"].cuda(), batch["name"])
+
             with torch.cuda.amp.autocast():
                 val_outputs = sliding_window_inference(val_inputs, roi, sw_batch_size, model)
-
-            save_volume(val_inputs, 'val_inputs')
-            save_volume(val_outputs, 'val_outputs')
 
             val_labels_list = decollate_batch(val_labels)
             val_labels_convert = [post_label(val_label_tensor) for val_label_tensor in val_labels_list]
             val_outputs_list = decollate_batch(val_outputs)
             val_output_convert = [post_pred(val_pred_tensor) for val_pred_tensor in val_outputs_list]
 
-            save_volume(val_labels_convert, 'val_labels')
-            save_volume(val_output_convert, 'val_output')
+            if test:
+                save_volume(val_labels_convert, val_name[0]+'labels')
+                save_volume(val_output_convert, val_name[0]+'result')
 
             dice_metric(y_pred=val_output_convert, y=val_labels_convert)
             epoch_iterator_val.set_description("Validate (%d / %d Steps)" % (global_step, 10.0))  # noqa: B038
@@ -402,6 +403,48 @@ def printParams():
     print("Val every: ", val_every)
     print("Learning rate: ", learning_rate)
 
+
+def test():
+    global max_epochs, device, batch_size, val_every, learning_rate, model, optimizer, scheduler, dice_loss, post_sigmoid, post_pred, dice_acc, \
+        model_inferer, loss_function, scaler, dice_metric, global_step, dice_val_best, global_step_best, epoch_loss_values, metric_values, data_dir, \
+        train_loader, val_loader, roi, sw_batch_size, infer_overlap, max_iterations, eval_num, post_label
+    batch_size = 1
+    print_config()
+
+
+    data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
+    # data_dir = "/home/bonese/UterUS/dataset"
+    # json_list = "C:/Users/Eva/Documents/UterUS/dataset/train.json"
+    train_loader, val_loader = get_loader(batch_size, data_dir, fold, roi)
+
+    printParams()
+
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    model = SwinUNETR(
+        img_size=roi,
+        in_channels=1,
+        out_channels=1,
+        feature_size=48,
+        drop_rate=0.0,
+        attn_drop_rate=0.0,
+        dropout_path_rate=0.0,
+        use_checkpoint=True,
+    ).to(device)
+    global_step = 0
+    torch.backends.cudnn.benchmark = True
+    post_label = AsDiscrete(threshold=0.5)
+    post_pred = AsDiscrete(threshold=0.5)
+    dice_metric = DiceMetric(include_background=True, reduction="mean", get_not_nans=False)
+
+    model.load_state_dict(torch.load(os.path.join(ROOT, "best_metric_model.pth")))
+
+    epoch_iterator_val = tqdm(val_loader, desc="Validate (X / X Steps) (dice=X.X)", dynamic_ncols=True)
+    dice_val = validation(epoch_iterator_val, True)
+
+    print(f"test completed, best_metric: {dice_val:.4f}")
+
 def main():
     global max_epochs, device, batch_size, val_every, learning_rate, model, optimizer, scheduler, dice_loss, post_sigmoid, post_pred, dice_acc, \
         model_inferer, loss_function, scaler, dice_metric, global_step, dice_val_best, global_step_best, epoch_loss_values, metric_values, data_dir, \
@@ -435,7 +478,7 @@ def main():
 
     torch.backends.cudnn.benchmark = True
     # loss_function = DiceCELoss(include_background=True)
-    loss_function = DiceLoss(sigmoid=True)
+    loss_function = DiceLoss(include_background=True, sigmoid=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
     scaler = torch.cuda.amp.GradScaler()
 
@@ -500,3 +543,4 @@ ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
 
 if __name__ == "__main__":
     main()
+    test()
