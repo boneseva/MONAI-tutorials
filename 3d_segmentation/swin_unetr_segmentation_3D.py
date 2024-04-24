@@ -356,10 +356,10 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
             epoch_loss /= step
             epoch_loss_values.append(epoch_loss)
             metric_values.append(dice_val)
+            dice_val_best = dice_val
+            global_step_best = global_step
+            torch.save(model.state_dict(), os.path.join(ROOT, "best_metric_model.pth"))
             if dice_val > dice_val_best:
-                dice_val_best = dice_val
-                global_step_best = global_step
-                torch.save(model.state_dict(), os.path.join(ROOT, "best_metric_model.pth"))
                 print(
                     "Model Was Saved ! Current Best Avg. Dice: {} Current Avg. Dice: {}".format(dice_val_best, dice_val)
                 )
@@ -384,8 +384,8 @@ def diceloss(pred, label):
     return loss
 
 
-roi = (96, 96, 96)
-batch_size = 1
+roi = (128, 128, 96)
+batch_size = 4
 sw_batch_size = 2
 fold = 1
 infer_overlap = 0.5
@@ -408,8 +408,8 @@ def main():
         train_loader, val_loader, roi, sw_batch_size, infer_overlap, max_iterations, eval_num, post_label
     print_config()
 
-    data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
-    # data_dir = "/home/bonese/UterUS/dataset"
+    # data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
+    data_dir = "/home/bonese/UterUS/dataset"
     # json_list = "C:/Users/Eva/Documents/UterUS/dataset/train.json"
     train_loader, val_loader = get_loader(batch_size, data_dir, fold, roi)
 
@@ -427,20 +427,22 @@ def main():
         attn_drop_rate=0.0,
         dropout_path_rate=0.0,
         use_checkpoint=True,
-    ).to(device)
+    )
     
+    # print("FROM PRELOADED")
     # weight = torch.load("/home/bonese/tutorials/model_swinvit.pt")
     # model.load_from(weights=weight)
-    # model.to(device)
-
+    
+    
+    model.to(device)
     torch.backends.cudnn.benchmark = True
     # loss_function = DiceCELoss(include_background=True)
     loss_function = DiceLoss(sigmoid=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
     scaler = torch.cuda.amp.GradScaler()
 
-    max_iterations = 100
-    eval_num = 10
+    max_iterations = 10000
+    eval_num = 100
     post_label = AsDiscrete(threshold=0.5)
     post_pred = AsDiscrete(threshold=0.5)
     dice_metric = DiceMetric(include_background=True, reduction="mean", get_not_nans=False)
@@ -495,8 +497,8 @@ def main():
     # print(f"train completed, best average dice: {val_acc_max:.4f} ")
 
 
-ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
-# ROOT = os.environ.get('MONAI_DATA_DIRECTORY')
+# ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
+ROOT = os.environ.get('MONAI_DATA_DIRECTORY')
 
 if __name__ == "__main__":
     main()
