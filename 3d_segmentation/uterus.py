@@ -60,9 +60,10 @@ class UterUS(Dataset):
         label = label_t.clone().detach().unsqueeze(0)
         
         image = image.float()
-        image /= 255.0
+        # image.to(torch.float16)
     
         label = label.float()
+        # label.to(torch.float16)
     
         sample = {'image': image, 'label': label, 'name': image_name}
         

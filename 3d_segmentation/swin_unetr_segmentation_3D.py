@@ -97,12 +97,20 @@ def get_loader(batch_size, data_dir, fold, roi):
         # transforms.LoadImaged(keys=["image", "label"], ensure_channel_first=True),
         transforms.ResizeWithPadOrCropd(keys=["image", "label"], spatial_size=roi),
         transforms.NormalizeIntensityd(keys=["image"], nonzero=True, channel_wise=True),
-        transforms.EnsureTyped(keys=["image", "label"], track_meta=True),
         transforms.RandShiftIntensityd(
             keys=["image"],
             offsets=0.10,
             prob=0.50,
         ),
+        transforms.ScaleIntensityRanged(
+            keys=["image"],
+            a_min=0,
+            a_max=255,
+            b_min=0.0,
+            b_max=1.0,
+            clip=True,
+        ),
+        transforms.EnsureTyped(keys=["image", "label"], track_meta=True),
     ])
 
     # Example transforms for validation
@@ -138,8 +146,11 @@ def get_loader(batch_size, data_dir, fold, roi):
 
 def save_volume(data, filename):
     # Save the volume that is metatensor to a file
-    array = data[0].cpu().numpy()
-    array = np.squeeze(array)
+    # check if data has 5 channels, if so, remove the first channel
+    if len(data[0].shape) > 3:
+        array = data[0].cpu().numpy()
+    if len(array.shape) > 3:
+        array = np.squeeze(array[0])
     nib.save(nib.Nifti1Image(array, np.eye(4)), os.path.join(os.path.curdir, filename+"volume.nii.gz"))
 
 
@@ -185,6 +196,7 @@ def val_epoch(
             val_labels_list = decollate_batch(target)
             val_outputs_list = decollate_batch(logits)
             val_output_convert = [post_pred(post_sigmoid(val_pred_tensor)) for val_pred_tensor in val_outputs_list]
+            save_volume(val_output_convert, 'val_output_epoch')
             acc_func.reset()
             acc_func(y_pred=val_output_convert, y=val_labels_list)
             acc, not_nans = acc_func.aggregate()
@@ -291,10 +303,16 @@ def validation(epoch_iterator_val):
             with torch.cuda.amp.autocast():
                 val_outputs = sliding_window_inference(val_inputs, roi, sw_batch_size, model)
 
+            save_volume(val_inputs, 'val_inputs')
+            save_volume(val_outputs, 'val_outputs')
+
             val_labels_list = decollate_batch(val_labels)
             val_labels_convert = [post_label(val_label_tensor) for val_label_tensor in val_labels_list]
             val_outputs_list = decollate_batch(val_outputs)
             val_output_convert = [post_pred(val_pred_tensor) for val_pred_tensor in val_outputs_list]
+
+            save_volume(val_labels_convert, 'val_labels')
+            save_volume(val_output_convert, 'val_output')
 
             dice_metric(y_pred=val_output_convert, y=val_labels_convert)
             epoch_iterator_val.set_description("Validate (%d / %d Steps)" % (global_step, 10.0))  # noqa: B038
@@ -302,6 +320,13 @@ def validation(epoch_iterator_val):
         dice_metric.reset()
     return mean_dice_val
 
+
+def calculate_dice(pred, label):
+    pred = pred[0].flatten()
+    label = label[0].flatten()
+    intersection = np.sum(pred * label)
+    dice = (2.0 * intersection) / (np.sum(pred) + np.sum(label))
+    return dice
 
 def train(global_step, train_loader, dice_val_best, global_step_best):
     model.train()
@@ -313,6 +338,8 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
         x, y = (batch["image"].cuda(), batch["label"].cuda())
         with torch.cuda.amp.autocast():
             logit_map = model(x)
+            # save_volume(logit_map.detach(), 'logit_map')
+            # save_volume(y, 'y')
             loss = loss_function(logit_map, y)
         scaler.scale(loss).backward()
         epoch_loss += loss.item()
@@ -345,14 +372,26 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
         global_step += 1
     return global_step, dice_val_best, global_step_best
 
-roi = (64, 64, 64)
-batch_size = 2
+
+def diceloss(pred, label):
+    # return metatensor with loss
+    pred = post_pred(pred)
+    # calculate dice coefficient
+    dice = calculate_dice(pred.cpu().numpy(), label.cpu().numpy())
+    # make a tensor with the dice coefficient
+    loss = torch.tensor(1-dice, device=device)
+
+    return loss
+
+
+roi = (96, 96, 96)
+batch_size = 1
 sw_batch_size = 2
 fold = 1
 infer_overlap = 0.5
 max_epochs = 2
 val_every = 1
-learning_rate = 1e-6
+learning_rate = 1e-4
 
 def printParams():
     print("Roi: ", roi)
@@ -395,14 +434,15 @@ def main():
     # model.to(device)
 
     torch.backends.cudnn.benchmark = True
-    loss_function = DiceCELoss(to_onehot_y=True, softmax=True)
+    # loss_function = DiceCELoss(include_background=True)
+    loss_function = DiceLoss(sigmoid=True)
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=1e-5)
     scaler = torch.cuda.amp.GradScaler()
 
     max_iterations = 100
     eval_num = 10
-    post_label = AsDiscrete(to_onehot=2)
-    post_pred = AsDiscrete(argmax=True, to_onehot=2)
+    post_label = AsDiscrete(threshold=0.5)
+    post_pred = AsDiscrete(threshold=0.5)
     dice_metric = DiceMetric(include_background=True, reduction="mean", get_not_nans=False)
     global_step = 0
     dice_val_best = 0.0
