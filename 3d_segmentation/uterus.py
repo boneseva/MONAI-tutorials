@@ -21,13 +21,21 @@ class UterUS(Dataset):
         self.transform = transform
         self.sample_list = []
 
+        if split == 'testing':
+            self.split = 'testing'
+            print("Just loading one volume")
+            files = os.listdir("C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/test_volume")
+            self.image_list = files
+
         train_path = self._base_dir+'/train.txt'
         test_path = self._base_dir+'/test.txt'
 
         if split == 'train':
+            self.split = 'train'
             with open(train_path, 'r') as f:
                 self.image_list = f.readlines()
         elif split == 'test':
+            self.split = 'test'
             with open(test_path, 'r') as f:
                 self.image_list = f.readlines()
 
@@ -42,15 +50,21 @@ class UterUS(Dataset):
     def __getitem__(self, idx):
         
         image_name = self.image_list[idx]
-        # image = nib.load(self._base_dir + "/annotated_volumes/{}.nii.gz".format(image_name)).get_fdata()
-        # label = nib.load(self._base_dir + "/annotations/{}.nii.gz".format(image_name)).get_fdata()
-        
-        reader = NibabelReader(channel_dim=None)
-        image_data = reader.read(self._base_dir + "/annotated_volumes/{}.nii.gz".format(image_name))
-        image, metadata = reader.get_data(image_data)
-        
-        label_data = reader.read(self._base_dir + "/annotations/{}.nii.gz".format(image_name))
-        label, metadata = reader.get_data(label_data)
+
+        if self.split == 'testing':
+            reader = NibabelReader(channel_dim=None)
+            image_data = reader.read("C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/test_volume/{}".format(image_name))
+            image, metadata = reader.get_data(image_data)
+
+            label_data = reader.read("C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/test_label/{}".format(image_name))
+            label, metadata = reader.get_data(label_data)
+        else:
+            reader = NibabelReader(channel_dim=None)
+            image_data = reader.read(self._base_dir + "/annotated_volumes/{}.nii.gz".format(image_name))
+            image, metadata = reader.get_data(image_data)
+
+            label_data = reader.read(self._base_dir + "/annotations/{}.nii.gz".format(image_name))
+            label, metadata = reader.get_data(label_data)
         
         image_t = torch.from_numpy(image)
         label_t = torch.from_numpy(label)
@@ -66,16 +80,31 @@ class UterUS(Dataset):
         # label.to(torch.float16)
     
         sample = {'image': image, 'label': label, 'name': image_name}
-        
+
         try:
             if self.transform:
                 sample = self.transform(sample)
+
+                randint = str(np.random.randint(0, 100))
+                save_volume(sample['image'], image_name + "image", randint)
+                save_volume(sample['label'], image_name + "label", randint)
             return sample
-    
+
+
         except Exception as e:
             print(f"Error loading data at index {idx}: {e}")
             # Return an empty dict or handle the case accordingly
             return sample
+
+def save_volume(data, filename, randint):
+    results_folder = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/augmentation_results/"
+    # Save the volume that is metatensor to a file
+    # check if data has 5 channels, if so, remove the first channel
+    if len(data[0].shape) > 3:
+        data = data[0].cpu().detach().numpy()
+    if len(data.shape) > 3:
+        data = np.squeeze(data[0])
+    nib.save(nib.Nifti1Image(data, np.eye(4)), os.path.join(results_folder, filename + randint + "volume.nii.gz"))
 
 class RandomNoise(object):
     def __init__(self, mu=0, sigma=0.1):
