@@ -102,6 +102,7 @@ def get_loader(batch_size, data_dir, roi, roi_validation):
 
     # Define transformations for the validation dataset
     val_transform = transforms.Compose([
+        transforms.RandSpatialCropd(keys=["image", "label"], roi_size=roi_validation, random_size=False),
         transforms.ResizeWithPadOrCropd(keys=["image", "label"], spatial_size=roi_validation),
         transforms.ScaleIntensityRanged(keys=["image"], a_min=0, a_max=255, b_min=0.0, b_max=1.0, clip=True),
         transforms.EnsureTyped(keys=["image", "label"], track_meta=True),
@@ -152,8 +153,8 @@ def validation(epoch_iterator_val, test=False):
             if test:
                 val_inputs, val_labels, val_name = (batch["image"].cuda(), batch["label"].cuda(), batch["name"])
 
-            # with torch.cuda.amp.autocast():
-            val_outputs = sliding_window_inference(val_inputs, roi_size=None, sw_batch_size=sw_batch_size, predictor=model)
+            with torch.cuda.amp.autocast():
+                val_outputs = sliding_window_inference(val_inputs, roi_size=None, sw_batch_size=sw_batch_size, predictor=model)
 
             val_labels_list = decollate_batch(val_labels)
             val_labels_convert = val_labels_list
@@ -181,9 +182,9 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
     for step, batch in enumerate(epoch_iterator):
         step += 1
         x, y = (batch["image"].cuda(), batch["label"].cuda())
-        # with torch.cuda.amp.autocast():
-        logit_map = model(x)
-        loss = loss_function(logit_map, y)
+        with torch.cuda.amp.autocast():
+            logit_map = model(x)
+            loss = loss_function(logit_map, y)
         scaler.scale(loss).backward()
         epoch_loss += loss.item()
         scaler.unscale_(optimizer)
@@ -218,13 +219,13 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
 
 
 roi = (160, 160, 128)
-roi_validation = (352, 288, 192)
+roi_validation = (160, 160, 128)
 batch_size = 2
-sw_batch_size = 2
+sw_batch_size = 1
 infer_overlap = 0.5
 learning_rate = 1e-3
-max_iterations = 10000
-eval_num = 2
+max_iterations = 100000
+eval_num = 100
 
 
 def printParams():
@@ -242,8 +243,8 @@ def main():
         train_loader, val_loader, roi, sw_batch_size, infer_overlap, max_iterations, eval_num, post_label
     print_config()
 
-    data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
-    # data_dir = "/home/bonese/UterUS/dataset"
+    # data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
+    data_dir = "/home/bonese/UterUS/dataset"
     train_loader, val_loader = get_loader(batch_size, data_dir, roi, roi_validation)
 
     printParams()
@@ -287,8 +288,8 @@ def main():
     print(f"train completed, best_metric: {dice_val_best:.4f} " f"at iteration: {global_step_best}")
 
 
-ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
-# ROOT = os.environ.get('MONAI_DATA_DIRECTORY')
+# ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
+ROOT = os.environ.get('MONAI_DATA_DIRECTORY')
 
 if __name__ == "__main__":
     main()
