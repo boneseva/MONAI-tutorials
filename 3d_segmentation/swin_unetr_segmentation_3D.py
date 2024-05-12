@@ -110,8 +110,9 @@ def get_loader(batch_size, data_dir, roi, roi_validation):
 
     # Initialize the custom UterUS dataset class for training and validation
     train_dataset = UterUS(base_dir=data_dir, split='train', transform=train_transform)
-    val_dataset = UterUS(base_dir=data_dir, split='test', transform=val_transform)
-
+    val_dataset = UterUS(base_dir=data_dir, split='val', transform=val_transform)
+    test_dataset = UterUS(base_dir=data_dir, split='test', transform=val_transform)
+    
     # Create DataLoader for the training dataset
     train_loader = DataLoader(
         train_dataset,
@@ -131,8 +132,17 @@ def get_loader(batch_size, data_dir, roi, roi_validation):
         collate_fn=pad_list_data_collate,
         pin_memory=False
     )
+    
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=1,  # Often, validation batch size is set to 1 for medical images
+        shuffle=False,
+        num_workers=0,
+        collate_fn=pad_list_data_collate,
+        pin_memory=False
+    )
 
-    return train_loader, val_loader
+    return train_loader, val_loader, test_loader
 
 
 def save_volume(data, filename):
@@ -197,14 +207,14 @@ def train(global_step, train_loader, dice_val_best, global_step_best):
 
         if (global_step % eval_num == 0 and global_step != 0) or global_step == max_iterations:
             epoch_iterator_val = tqdm(val_loader, desc="Validate (X / X Steps) (dice=X.X)", dynamic_ncols=True)
-            dice_val = validation(epoch_iterator_val, True)
+            dice_val = validation(epoch_iterator_val, False)
             epoch_loss /= step
             epoch_loss_values.append(epoch_loss)
             metric_values.append(dice_val)
-            dice_val_best = dice_val
             global_step_best = global_step
-            torch.save(model.state_dict(), os.path.join(ROOT, "best_metric_model.pth"))
             if dice_val > dice_val_best:
+                torch.save(model.state_dict(), os.path.join(ROOT, "best_metric_model.pth"))
+                dice_val_best = dice_val
                 print(
                     "Model Was Saved ! Current Best Avg. Dice: {} Current Avg. Dice: {}".format(dice_val_best, dice_val)
                 )
@@ -224,7 +234,7 @@ batch_size = 2
 sw_batch_size = 1
 infer_overlap = 0.5
 learning_rate = 1e-3
-max_iterations = 100000
+max_iterations = 20000
 eval_num = 100
 
 
@@ -245,7 +255,7 @@ def main():
 
     # data_dir = "C:/Users/Eva/Documents/UterUS/dataset"
     data_dir = "/home/bonese/UterUS/dataset"
-    train_loader, val_loader = get_loader(batch_size, data_dir, roi, roi_validation)
+    train_loader, val_loader, test_loader = get_loader(batch_size, data_dir, roi, roi_validation)
 
     printParams()
 
@@ -263,10 +273,12 @@ def main():
         use_checkpoint=True,
     )
 
-    # weight = torch.load("C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results/best_metric_model.pth")
-    # model.load_from(weights=weight)
     # model.load_state_dict(
-    #     torch.load(r'C:\Users\Eva\Documents\MONAI-tutorials\3d_segmentation\results\best_metric_model.pth'))
+    #     torch.load(r'/home/bonese/tutorials/model_swinvit.pt'))
+    
+    print("Pretrained model")
+    weight = torch.load("/home/bonese/tutorials/model_swinvit.pt")
+    model.load_from(weights=weight)
     model.to(device)
 
     torch.backends.cudnn.benchmark = True
@@ -282,14 +294,24 @@ def main():
     global_step_best = 0
     epoch_loss_values = []
     metric_values = []
-    while global_step < max_iterations:
-        global_step, dice_val_best, global_step_best = train(global_step, train_loader, dice_val_best, global_step_best)
-    model.load_state_dict(torch.load(os.path.join(ROOT, "best_metric_model.pth")))
-    print(f"train completed, best_metric: {dice_val_best:.4f} " f"at iteration: {global_step_best}")
+    
+    if training:
+        while global_step < max_iterations:
+            global_step, dice_val_best, global_step_best = train(global_step, train_loader, dice_val_best, global_step_best)
+            print(f"train completed, best_metric: {dice_val_best:.4f} " f"at iteration: {global_step_best}")      
+    elif testing:
+        model.load_state_dict(torch.load(os.path.join(results_folder, "best_metric_model.pth")))
+        epoch_iterator_test = tqdm(test_loader, desc="Testing (X / X Steps) (dice=X.X)", dynamic_ncols=True)
+        dice_val = validation(epoch_iterator_test, False)
+        print("DICE: {}".format(dice_val))
 
 
 # ROOT = "C:/Users/Eva/Documents/MONAI-tutorials/3d_segmentation/results"
 ROOT = os.environ.get('MONAI_DATA_DIRECTORY')
+results_folder = r"/home/bonese/tutorials/3d_segmentation/normal_bestdice835(33426049)"
+# results_folder = r"/home/bonese/tutorials/3d_segmentation/pretrained_bestdice860(33586664)"
+testing = True
+training = False
 
 if __name__ == "__main__":
     main()

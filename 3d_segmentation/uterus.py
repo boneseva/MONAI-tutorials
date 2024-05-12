@@ -28,11 +28,16 @@ class UterUS(Dataset):
             self.image_list = files
 
         train_path = self._base_dir+'/train.txt'
+        val_path = self._base_dir+'/val.txt'
         test_path = self._base_dir+'/test.txt'
 
         if split == 'train':
             self.split = 'train'
             with open(train_path, 'r') as f:
+                self.image_list = f.readlines()
+        elif split == 'val':
+            self.split = 'val'
+            with open(val_path, 'r') as f:
                 self.image_list = f.readlines()
         elif split == 'test':
             self.split = 'test'
@@ -84,10 +89,6 @@ class UterUS(Dataset):
         try:
             if self.transform:
                 sample = self.transform(sample)
-
-                randint = str(np.random.randint(0, 100))
-                save_volume(sample['image'], image_name + "image", randint)
-                save_volume(sample['label'], image_name + "label", randint)
             return sample
 
 
